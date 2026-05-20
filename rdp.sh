@@ -1,119 +1,69 @@
 #!/bin/bash
 # ============================================
-# 🚀 Auto Installer: Windows 11 on Docker + Cloudflare Tunnel
+# Script: windows11-docker-tunnel.sh
 # ============================================
 
 set -e
 
-echo "=== 🔧 Menjalankan sebagai root ==="
+# Cek root
 if [ "$EUID" -ne 0 ]; then
-  echo "Script ini butuh akses root. Jalankan dengan: sudo bash install-windows11-cloudflare.sh"
+  echo "Jalankan dengan: sudo bash $0"
   exit 1
 fi
 
-echo
-echo "=== 📦 Update & Install Docker Compose ==="
+# Update & install dependencies
 apt update -y
-apt install docker-compose -y
+apt install -y docker-compose wget curl qemu-kvm libvirt-daemon-system
 
-systemctl enable docker
-systemctl start docker
+# Setup KVM permissions
+adduser $(who am i | awk '{print $1}') kvm
 
-echo
-echo "=== 📂 Membuat direktori kerja dockercom ==="
+# Buat direktori kerja
 mkdir -p /root/dockercom
 cd /root/dockercom
 
-echo
-echo "=== 🧾 Membuat file windows.yml ==="
-cat > windows.yml <<'EOF'
-version: "3.9"
+# Buat docker-compose.yml
+cat > docker-compose.yml <<'EOF'
+version: "3.8"
 services:
   windows:
-    image: dockurr/windows
-    container_name: windows
+    image: dockurr/windows:latest
+    container_name: windows11
     environment:
       VERSION: "11"
-      USERNAME: "MASTER"
-      PASSWORD: "admin@123"
-      RAM_SIZE: "7G"
-      CPU_CORES: "4"
+      USERNAME: "user"
+      PASSWORD: "Pass@123"
+      RAM_SIZE: "4G"
+      CPU_CORES: "2"
+      DISK_SIZE: "64G"
     devices:
       - /dev/kvm
-      - /dev/net/tun
     cap_add:
       - NET_ADMIN
+      - SYS_NICE
     ports:
       - "8006:8006"
-      - "3389:3389/tcp"
-      - "3389:3389/udp"
+      - "3389:3389"
     volumes:
-      - /tmp/windows-storage:/storage
-    restart: always
-    stop_grace_period: 2m
-
+      - ./windows-data:/storage
+    restart: unless-stopped
 EOF
 
-echo
-echo "=== ✅ File windows.yml berhasil dibuat ==="
-cat windows.yml
+# Jalankan container
+docker-compose up -d
 
-echo
-echo "=== 🚀 Menjalankan Windows 11 container ==="
-docker-compose -f windows.yml up -d
-
-echo
-echo "=== ☁️ Instalasi Cloudflare Tunnel ==="
-if [ ! -f "/usr/local/bin/cloudflared" ]; then
-  wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O /usr/local/bin/cloudflared
-  chmod +x /usr/local/bin/cloudflared
+# Install cloudflared
+if ! command -v cloudflared &> /dev/null; then
+  wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+  chmod +x cloudflared-linux-amd64
+  mv cloudflared-linux-amd64 /usr/local/bin/cloudflared
 fi
 
-echo
-echo "=== 🌍 Membuat tunnel publik untuk akses web & RDP ==="
-nohup cloudflared tunnel --url http://localhost:8006 > /var/log/cloudflared_web.log 2>&1 &
-nohup cloudflared tunnel --url tcp://localhost:3389 > /var/log/cloudflared_rdp.log 2>&1 &
-sleep 6
+# Jalankan tunnel (perbaikan untuk TCP)
+nohup cloudflared tunnel --url http://localhost:8006 > /tmp/cf-web.log 2>&1 &
+sleep 3
+nohup cloudflared tunnel --url tcp://localhost:3389 > /tmp/cf-rdp.log 2>&1 &
 
-CF_WEB=$(grep -o "https://[a-zA-Z0-9.-]*\.trycloudflare\.com" /var/log/cloudflared_web.log | head -n 1)
-CF_RDP=$(grep -o "tcp://[a-zA-Z0-9.-]*\.trycloudflare\.com:[0-9]*" /var/log/cloudflared_rdp.log | head -n 1)
-
-echo
-echo "=============================================="
-echo "🎉 Instalasi Selesai!"
-echo
-if [ -n "$CF_WEB" ]; then
-  echo "🌍 Web Console (NoVNC / UI):"
-  echo "    ${CF_WEB}"
-else
-  echo "⚠️ Tidak menemukan link web Cloudflare (port 8006)"
-  echo "    Cek log: tail -f /var/log/cloudflared_web.log"
-fi
-
-if [ -n "$CF_RDP" ]; then
-  echo
-  echo "🖥️  Remote Desktop (RDP) melalui Cloudflare:"
-  echo "    ${CF_RDP}"
-else
-  echo "⚠️ Tidak menemukan link RDP Cloudflare (port 3389)"
-  echo "    Cek log: tail -f /var/log/cloudflared_rdp.log"
-fi
-
-echo
-echo "🔑 Username: MASTER"
-echo "🔒 Password: admin@123"
-echo
-echo "Untuk melihat status container:"
-echo "  docker ps"
-echo
-echo "Untuk menghentikan VM:"
-echo "  docker stop windows"
-echo
-echo "Untuk melihat log Windows:"
-echo "  docker logs -f windows"
-echo
-echo "Untuk melihat link Cloudflare:"
-echo "  grep 'trycloudflare' /var/log/cloudflared_*.log"
-echo
-echo "=== ✅ Windows 11 di Docker siap digunakan! ==="
-echo "=============================================="
+echo "=== Selesai ==="
+echo "Tunggu 1-2 menit hingga tunnel aktif"
+echo "Cek log: tail -f /tmp/cf-*.log"
