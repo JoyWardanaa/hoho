@@ -1,28 +1,17 @@
 #!/bin/bash
-# ============================================
-# Script: windows11-docker-tunnel.sh
-# ============================================
-
+# fix-rdp-codespaces.sh
 set -e
 
-# Cek root
-if [ "$EUID" -ne 0 ]; then
-  echo "Jalankan dengan: sudo bash $0"
-  exit 1
-fi
+echo "=== Install Docker & Docker Compose ==="
+sudo apt update
+sudo apt install -y docker.io docker-compose
+sudo service docker start
 
-# Update & install dependencies
-apt update -y
-apt install -y docker-compose wget curl qemu-kvm libvirt-daemon-system
+echo "=== Buat direktori kerja ==="
+mkdir -p ~/windows-docker
+cd ~/windows-docker
 
-# Setup KVM permissions
-adduser $(who am i | awk '{print $1}') kvm
-
-# Buat direktori kerja
-mkdir -p /root/dockercom
-cd /root/dockercom
-
-# Buat docker-compose.yml
+echo "=== Buat docker-compose.yml (tanpa KVM) ==="
 cat > docker-compose.yml <<'EOF'
 version: "3.8"
 services:
@@ -31,39 +20,37 @@ services:
     container_name: windows11
     environment:
       VERSION: "11"
-      USERNAME: "user"
-      PASSWORD: "Pass@123"
+      USERNAME: "admin"
+      PASSWORD: "Admin123"
       RAM_SIZE: "4G"
       CPU_CORES: "2"
-      DISK_SIZE: "64G"
-    devices:
-      - /dev/kvm
-    cap_add:
-      - NET_ADMIN
-      - SYS_NICE
+      DISK_SIZE: "32G"
+      # Nonaktifkan KVM
+      KVM: "N"
     ports:
       - "8006:8006"
       - "3389:3389"
     volumes:
-      - ./windows-data:/storage
+      - ./storage:/storage
     restart: unless-stopped
 EOF
 
-# Jalankan container
-docker-compose up -d
+echo "=== Jalankan container ==="
+sudo docker-compose up -d
 
-# Install cloudflared
-if ! command -v cloudflared &> /dev/null; then
-  wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
-  chmod +x cloudflared-linux-amd64
-  mv cloudflared-linux-amd64 /usr/local/bin/cloudflared
-fi
+echo "=== Install Cloudflare Tunnel ==="
+wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+chmod +x cloudflared-linux-amd64
+sudo mv cloudflared-linux-amd64 /usr/local/bin/cloudflared
 
-# Jalankan tunnel (perbaikan untuk TCP)
-nohup cloudflared tunnel --url http://localhost:8006 > /tmp/cf-web.log 2>&1 &
-sleep 3
-nohup cloudflared tunnel --url tcp://localhost:3389 > /tmp/cf-rdp.log 2>&1 &
+echo "=== Jalankan tunnel untuk web (NoVNC) ==="
+nohup cloudflared tunnel --url http://localhost:8006 > ~/cf-web.log 2>&1 &
 
-echo "=== Selesai ==="
-echo "Tunggu 1-2 menit hingga tunnel aktif"
-echo "Cek log: tail -f /tmp/cf-*.log"
+sleep 5
+echo ""
+echo "=== 🔗 Ambil link dari log ==="
+grep -o "https://[a-zA-Z0-9.-]*\.trycloudflare\.com" ~/cf-web.log | head -1
+echo ""
+echo "Username: admin"
+echo "Password: Admin123"
+echo "Tunggu 3-5 menit sampai Windows booting"
